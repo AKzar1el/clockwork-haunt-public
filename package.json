@@ -1,0 +1,12 @@
+{
+  "name": "clockwork-haunt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/tests/*.test.ts",
+    "build": "node build.mjs",
+    "preview": "node scripts/preview.mjs",
+    "test:browser": "node scripts/browser-test.mjs"
+  }
+}

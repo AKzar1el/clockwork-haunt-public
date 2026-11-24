@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A deterministic lab for late, stale and duplicate workflow data.">
+  <title>Clockwork Haunt | Workflow Incident Lab</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">WORKFLOW INCIDENT LAB <span>01 / SIMULATION</span></p>
+      <h1>Clockwork <em>Haunt</em></h1>
+      <p class="lede">The run succeeded. Did it use the right data? Replay an overnight report and follow every read, handoff and duplicate.</p>
+      <p class="legend"><span class="signal" aria-hidden="true"></span> Synthetic data · Local simulation · No live jobs</p>
+    </header>
+    <section class="panel controls" aria-labelledby="replay-title">
+      <div><p class="eyebrow">CONTROL ROOM</p><h2 id="replay-title">Replay a scenario</h2></div>
+      <label for="scenario">Scenario
+        <select id="scenario">
+          <option value="fresh">01 · On-time collector</option>
+          <option value="late" selected>02 · Late collector</option>
+          <option value="wait">03 · Wait for fresh data</option>
+          <option value="duplicate">04 · Duplicate delivery</option>
+        </select>
+      </label>
+      <label id="variant-label" for="variant" hidden>Policy or input
+        <select id="variant"></select>
+      </label>
+      <div class="actions"><button type="button" id="replay">Replay</button><button type="button" id="export" class="quiet">Export JSON</button></div>
+      <p id="announcer" class="sr" role="status"></p>
+    </section>
+    <div id="report"><p class="panel">Loading the simulation…</p></div>
+    <noscript><p class="panel">Enable JavaScript to run this local simulator.</p></noscript>
+    <footer>One clock. Same inputs, same evidence. <span>Clockwork Haunt</span></footer>
+  </main>
+  <script type="module" src="./ui/app.js"></script>
+</body>
+</html>
