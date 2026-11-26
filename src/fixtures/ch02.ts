@@ -32,3 +32,21 @@ export const ch02: ScenarioConfig = {
     },
   ],
 };
+
+export function lateCollectorJobs(scenario: ScenarioConfig) {
+  const collector = scenario.jobs.find(job=>job.id==='collector-w1');
+  const report = scenario.jobs.find(job=>job.id==='report-w1');
+  if (!collector?.output || !report || report.inputs.length !== 1 ||
+      report.inputs[0].key !== collector.output.key || report.inputs[0].requiredWindow !== collector.output.windowIndex) {
+    throw new Error('Late collector fixture must publish the report\'s one required input.');
+  }
+  return {collector,report,target:report.inputs[0]};
+}
+
+/** The same late collector, but the report does not use the prior window. */
+export function lateWithoutFallback(): ScenarioConfig {
+  const scenario = structuredClone(ch02);
+  scenario.scenarioId = 'CH-02-no-fallback';
+  lateCollectorJobs(scenario).report.fallbackEnabled = false;
+  return scenario;
+}

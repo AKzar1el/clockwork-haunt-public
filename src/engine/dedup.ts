@@ -7,7 +7,7 @@ export class DedupGuard {
     return `${key}::${windowIndex}`;
   }
 
-  getOrCreate(key: string, windowIndex: number): KeySlot {
+  private getOrCreate(key: string, windowIndex: number): KeySlot {
     const id = this.slotId(key, windowIndex);
     let slot = this._slots.get(id);
     if (!slot) {
@@ -20,7 +20,7 @@ export class DedupGuard {
   /**
    * Register a commit attempt. attemptCount increments before the suppression
    * check in all cases (AC-034).
-   * Returns 'accepted' or 'suppressed'.
+   * Returns the recorded suppression, or null when accepted.
    */
   commit(
     key: string,
@@ -28,19 +28,19 @@ export class DedupGuard {
     attemptId: string,
     minute: Minute, // Completion minute
     deduplicationEnabled: boolean,
-  ): 'accepted' | 'suppressed' {
+  ): SuppressedAttemptRecord | null {
     const slot = this.getOrCreate(key, windowIndex);
     slot.attemptCount += 1; // always increment first
 
     if (!deduplicationEnabled) {
       slot.effectCount += 1;
-      return 'accepted';
+      return null;
     }
 
     if (slot.acceptedEffectId === null) {
       slot.acceptedEffectId = attemptId;
       slot.effectCount += 1;
-      return 'accepted';
+      return null;
     }
 
     const rec: SuppressedAttemptRecord = {
@@ -50,7 +50,7 @@ export class DedupGuard {
       reason: 'duplicate-output-key',
     };
     slot.suppressedAttempts.push(rec);
-    return 'suppressed';
+    return rec;
   }
 
   allSlots(): KeySlot[] {

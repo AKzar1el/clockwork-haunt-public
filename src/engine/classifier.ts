@@ -1,5 +1,9 @@
-import type { ArtifactReadRecord, Minute, ReadState } from './types.ts';
+import type { ArtifactReadRecord, ArtifactRecord, Minute, ReadState } from './types.ts';
 import type { ArtifactStore } from './store.ts';
+
+export function publishHintKey(key: string, window: number): string {
+  return `${key}:${window}`;
+}
 
 export interface ClassifyParams {
   store: ArtifactStore;
@@ -11,6 +15,8 @@ export interface ClassifyParams {
   maxArtifactAge: number;
   jobId: string;
   attemptId: string;
+  // Optional exact winner already selected by the policy gate for this slot and minute.
+  knownExact?: ArtifactRecord;
 }
 
 /**
@@ -23,15 +29,17 @@ export function classifyRead(p: ClassifyParams): ArtifactReadRecord {
     scheduledPublishMinute, fallbackEnabled, maxArtifactAge,
     jobId, attemptId,
   } = p;
+  const readId = JSON.stringify([attemptId, key, requiredWindow, readMinute]);
 
   // ── Fresh (AC-002) ──────────────────────────────────────────────────────
-  const exact = store.get(key, requiredWindow);
+  const exact = p.knownExact ?? store.get(key, requiredWindow, readMinute);
   if (exact && exact.producerValid) {
     const age = readMinute - exact.publishMinute;
     if (age >= 0 && age <= maxArtifactAge) {
-      return freeze({
-        jobId, attemptId, key, requiredWindow,
+      return Object.freeze<ArtifactReadRecord>({
+        readId, jobId, attemptId, key, requiredWindow,
         actualWindowIndex: requiredWindow,
+        producerAttemptId: exact.attemptId,
         state: 'Fresh',
         publishMinute: exact.publishMinute,
         readMinute,
@@ -44,10 +52,12 @@ export function classifyRead(p: ClassifyParams): ArtifactReadRecord {
   if (exact && exact.producerValid) {
     const age = readMinute - exact.publishMinute;
     if (age > maxArtifactAge) {
-      return freeze({
-        jobId, attemptId, key, requiredWindow,
+      return Object.freeze<ArtifactReadRecord>({
+        readId, jobId, attemptId, key, requiredWindow,
         actualWindowIndex: requiredWindow,
+        producerAttemptId: exact.attemptId,
         state: 'Stale',
+        staleReason: 'ExpiredExact',
         publishMinute: exact.publishMinute,
         readMinute,
         artifactAge: age,
@@ -56,15 +66,17 @@ export function classifyRead(p: ClassifyParams): ArtifactReadRecord {
   }
 
   // ── Stale arm (a): prior-window fallback, valid producer (AC-003a) ──────
-  if (fallbackEnabled) {
-    const prior = store.getBestBelow(key, requiredWindow);
+  if (fallbackEnabled && !exact) {
+    const prior = store.getBestBelow(key, requiredWindow, readMinute);
     if (prior) {
       const age = readMinute - prior.publishMinute;
-      if (!exact && age >= 0) {
-        return freeze({
-          jobId, attemptId, key, requiredWindow,
+      if (age >= 0) {
+        return Object.freeze<ArtifactReadRecord>({
+          readId, jobId, attemptId, key, requiredWindow,
           actualWindowIndex: prior.windowIndex,
+          producerAttemptId: prior.attemptId,
           state: 'Stale',
+          staleReason: 'PriorWindow',
           publishMinute: prior.publishMinute,
           readMinute,
           artifactAge: age,
@@ -75,10 +87,12 @@ export function classifyRead(p: ClassifyParams): ArtifactReadRecord {
 
   // ── Unknown arm (b): artifact present but invalid producer (AC-004b) ────
   if (exact && !exact.producerValid) {
-    return freeze({
-      jobId, attemptId, key, requiredWindow,
-      actualWindowIndex: requiredWindow,
+    return Object.freeze<ArtifactReadRecord>({
+      readId, jobId, attemptId, key, requiredWindow,
+      actualWindowIndex: null,
+      producerAttemptId: null,
       state: 'Unknown',
+      unavailableReason: 'InvalidProducer',
       publishMinute: null,
       readMinute,
       artifactAge: null,
@@ -87,10 +101,12 @@ export function classifyRead(p: ClassifyParams): ArtifactReadRecord {
 
   // ── Unknown arm (a): no artifact, future scheduled publish (AC-004a) ────
   if (!exact && scheduledPublishMinute !== undefined && scheduledPublishMinute > readMinute) {
-    return freeze({
-      jobId, attemptId, key, requiredWindow,
+    return Object.freeze<ArtifactReadRecord>({
+      readId, jobId, attemptId, key, requiredWindow,
       actualWindowIndex: null,
+      producerAttemptId: null,
       state: 'Unknown',
+      unavailableReason: 'PublicationPending',
       publishMinute: null,
       readMinute,
       artifactAge: null,
@@ -98,30 +114,29 @@ export function classifyRead(p: ClassifyParams): ArtifactReadRecord {
   }
 
   // ── Missing (AC-005) ────────────────────────────────────────────────────
-  return freeze({
-    jobId, attemptId, key, requiredWindow,
+  return Object.freeze<ArtifactReadRecord>({
+    readId, jobId, attemptId, key, requiredWindow,
     actualWindowIndex: null,
+    producerAttemptId: null,
     state: 'Missing',
+    unavailableReason: 'NotAvailableAtRead',
     publishMinute: null,
     readMinute,
     artifactAge: null,
   });
 }
 
-function freeze(r: ArtifactReadRecord): ArtifactReadRecord {
-  return Object.freeze(r);
-}
-
 /** Derive worst-case InputFreshnessStatus across all reads (AC-012). */
+const freshnessRank: Record<ReadState, number> = { Fresh: 0, Stale: 1, Unknown: 2, Missing: 3 };
+
 export function worstFreshness(
-  states: ReadState[],
-): 'Fresh' | 'Stale' | 'Unknown' | 'Missing' {
-  const rank: Record<ReadState, number> = {
-    Fresh: 0, Stale: 1, Unknown: 2, Missing: 3,
-  };
+  reads: readonly Pick<ArtifactReadRecord, 'state'>[],
+): ReadState | null {
+  if (reads.length === 0) return null;
   let worst: ReadState = 'Fresh';
-  for (const s of states) {
-    if (rank[s] > rank[worst]) worst = s;
+  for (const { state } of reads) {
+    if (state === 'Missing') return state;
+    if (freshnessRank[state] > freshnessRank[worst]) worst = state;
   }
   return worst;
 }

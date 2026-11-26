@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node --experimental-strip-types --test src/tests/*.test.ts",
     "build": "node build.mjs",
+    "check": "node scripts/check.mjs",
     "preview": "node scripts/preview.mjs",
     "test:browser": "node scripts/browser-test.mjs"
   }

@@ -28,12 +28,29 @@ export const ch03a: ScenarioConfig = {
   ],
 };
 
+/** CH-03d: Collector executes but fails before publishing the expected window. */
+export const ch03FailedCollector: ScenarioConfig = {
+  ...ch03a,
+  scenarioId: 'CH-03d',
+  jobs: [{ ...ch03a.jobs[0], completionOutcome: 'Failure' }, ch03a.jobs[1]],
+};
+
 /** CH-03b: No collector — artifact never published; deadline miss at 495. */
 export const ch03b: ScenarioConfig = {
   scenarioId: 'CH-03b',
   maxArtifactAge: 60,
   jobs: [
     { ...BASE_REPORT, scheduledPublishMinutes: {} },
+  ],
+};
+
+/** CH-03e: W1 was already 26 minutes old at admission; no fresh attempt follows. */
+export const ch03ExpiredInput: ScenarioConfig = {
+  ...ch03b,
+  scenarioId: 'CH-03e',
+  maxArtifactAge: 20,
+  preloadedArtifacts: [
+    { key:'data', windowIndex:1, publishMinute:460, attemptId:'preload-expired-w1', producerValid:true },
   ],
 };
 

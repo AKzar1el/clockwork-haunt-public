@@ -1,28 +1,29 @@
-import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createStaticServer, hasPreviewIndex } from './static-server.mjs';
 
 const root = fileURLToPath(new URL('../dist', import.meta.url));
-const port = Number(process.argv[2] ?? '8787');
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port');
-const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
-await readFile(resolve(root, 'index.html'));
-const server = createServer(async (req, res) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405, { Allow: 'GET, HEAD' }).end();
-    return;
-  }
-  try {
-    const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
-    const file = resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
-    const type = types[extname(file)];
-    if (!file.startsWith(root + sep) || !type) throw new Error('Not found');
-    const content = await readFile(file);
-    res.writeHead(200, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff' })
-      .end(req.method === 'HEAD' ? undefined : content);
-  } catch {
-    res.writeHead(404).end('Not found');
-  }
+const usage = 'Usage: node scripts/preview.mjs [port]';
+if (process.argv.length === 3 && process.argv[2] === '--help') {
+  console.log(usage);
+  console.log('Default: http://127.0.0.1:8787/. Use port 0 to choose an available loopback port.');
+  console.log('Run node build.mjs first if the static build is missing.');
+  process.exit(0);
+}
+const portText = process.argv[2] ?? '8787';
+const port = Number(portText);
+if (!/^\d{1,5}$/.test(portText) || port > 65535 || process.argv.length > 3) {
+  console.error(usage + '\nPort must be an integer from 0 to 65535.');
+  process.exit(2);
+}
+if (!(await hasPreviewIndex(root))) {
+  console.error('No static build found. Run node build.mjs before starting the preview.');
+  process.exit(1);
+}
+const server = createStaticServer(root);
+server.on('error', error => {
+  console.error(error.code === 'EADDRINUSE'
+    ? 'Preview port ' + port + ' is in use. Run node scripts/preview.mjs 0 to choose an open loopback port.'
+    : 'Preview server could not start: ' + error.message);
+  process.exitCode = 1;
 });
-server.listen(port, '127.0.0.1', () => console.log('Clockwork Haunt: http://127.0.0.1:' + port + '/'));
+server.listen(port, '127.0.0.1', () => console.log('Clockwork Haunt: http://127.0.0.1:' + server.address().port + '/'));

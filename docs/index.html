@@ -2,10 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-ZYPrfGOxHtOMeR4YmARRbsCIlzM0TL2cGDWSMJ3ecR4='; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A deterministic lab for late, stale and duplicate workflow data.">
+  <meta name="description" content="Rehearse a late workflow: compare running on schedule with waiting for fresh data, then download reproducible evidence.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Clockwork Haunt | Workflow Incident Lab">
+  <meta property="og:description" content="Rehearse a late workflow: compare running on schedule with waiting for fresh data, then download reproducible evidence.">
   <title>Clockwork Haunt | Workflow Incident Lab</title>
   <link rel="stylesheet" href="./style.css">
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
 </head>
 <body>
   <main class="shell">
@@ -13,12 +18,15 @@
       <p class="eyebrow">WORKFLOW INCIDENT LAB <span>01 / SIMULATION</span></p>
       <h1>Clockwork <em>Haunt</em></h1>
       <p class="lede">The run succeeded. Did it use the right data? Replay an overnight report and follow every read, handoff and duplicate.</p>
+      <a id="try-policy-lab" class="hero-link" href="#compare-title">Compare two policies on the same incident</a>
       <p class="legend"><span class="signal" aria-hidden="true"></span> Synthetic data · Local simulation · No live jobs</p>
     </header>
+    <p id="startup-loading" class="panel" role="status" hidden>Loading the simulation…</p>
+    <noscript><p id="noscript-hint" class="panel">Enable JavaScript to run this local simulator.</p></noscript>
     <section class="panel controls" aria-labelledby="replay-title">
-      <div><p class="eyebrow">CONTROL ROOM</p><h2 id="replay-title">Replay a scenario</h2></div>
+      <div><p class="eyebrow">CONTROL ROOM</p><h2 id="replay-title" tabindex="-1">Replay a scenario</h2></div>
       <label for="scenario">Scenario
-        <select id="scenario">
+        <select id="scenario" disabled>
           <option value="fresh">01 · On-time collector</option>
           <option value="late" selected>02 · Late collector</option>
           <option value="wait">03 · Wait for fresh data</option>
@@ -26,15 +34,83 @@
         </select>
       </label>
       <label id="variant-label" for="variant" hidden>Policy or input
-        <select id="variant"></select>
+        <select id="variant" disabled></select>
       </label>
-      <div class="actions"><button type="button" id="replay">Replay</button><button type="button" id="export" class="quiet">Export JSON</button></div>
+      <div class="actions"><button type="button" id="replay" disabled>Replay</button><button type="button" id="export" class="quiet" disabled>Export JSON</button></div>
+      <a id="view-replay-results" class="panel-link" href="#report" hidden>View replay results</a>
+      <button type="button" id="show-replay-link" class="quiet" aria-controls="share-tools" aria-expanded="false" disabled>Show replay link</button>
+      <p id="share-unavailable" class="muted export-feedback" hidden></p>
+      <div id="share-tools" class="share-link-field" hidden>
+        <label for="replay-link">Shareable replay URL
+          <input id="replay-link" type="url" readonly>
+        </label>
+        <div class="actions"><button type="button" id="copy-replay-link" class="quiet">Copy link</button></div>
+        <p id="share-feedback" class="muted export-feedback" role="status"></p>
+      </div>
       <p id="announcer" class="sr" role="status"></p>
+      <p id="replay-location-feedback" class="muted export-feedback" role="status"></p>
+      <p id="export-feedback" class="muted export-feedback" role="status"></p>
     </section>
-    <div id="report"><p class="panel">Loading the simulation…</p></div>
-    <noscript><p class="panel">Enable JavaScript to run this local simulator.</p></noscript>
+    <section class="panel" aria-labelledby="compare-title">
+      <p class="eyebrow">POLICY LAB</p>
+      <h2 id="compare-title" tabindex="-1">Same incident, two policies</h2>
+      <noscript><p id="direct-noscript-hint" class="muted">Enable JavaScript to run this local simulator.</p></noscript>
+      <p class="muted">Same schedule and data. Move the collector's arrival to compare two policies.</p>
+      <div class="arrival-label">
+        <label for="arrival">Collector arrival</label>
+        <span id="arrival-time" aria-hidden="true">08:12</span>
+        <span id="arrival-range" class="muted">08:04 to 08:18</span>
+      </div>
+      <input id="arrival" type="range" min="484" max="498" step="1" value="492" aria-describedby="arrival-range" disabled>
+      <div class="actions">
+        <button type="button" id="show-tradeoff" class="quiet" disabled>Show freshness trade-off</button>
+        <button type="button" id="show-cutoff-miss" class="quiet" disabled>Show cutoff miss</button>
+      </div>
+      <div id="comparison"></div>
+      <button type="button" id="retry-comparison" class="quiet" hidden>Retry comparison</button>
+      <p id="policy-announcer" class="sr" role="status"></p>
+      <button type="button" id="export-comparison" class="quiet" disabled>Export comparison JSON</button>
+      <p id="comparison-feedback" class="muted export-feedback" role="status"></p>
+      <details class="policy-notes">
+        <summary>How freshness and the cutoff work</summary>
+        <p id="policy-freshness-rule" class="muted" hidden></p>
+        <p class="muted">The finish cutoff gates the waiting policy. The on-schedule result uses it only as a reference for comparison.</p>
+        <p class="muted">Times are on the simulated clock, not in your local time zone.</p>
+      </details>
+      <a class="panel-link" href="#replay-title">Try another replay</a>
+    </section>
+    <div id="report" role="region" aria-label="Replay results" tabindex="-1"></div>
+    <noscript><p id="report-noscript-hint" class="panel">Enable JavaScript to run this local simulator.</p></noscript>
     <footer>One clock. Same inputs, same evidence. <span>Clockwork Haunt</span></footer>
   </main>
+  <script>
+    const startupNotice = document.getElementById('startup-loading');
+    const loadingTimer = window.setTimeout(() => {
+      if (document.documentElement.dataset.ready !== 'true') startupNotice.hidden = false;
+    }, 180);
+    function showLoadFailure() {
+      if (document.documentElement.dataset.ready === 'true') return;
+      if (startupNotice.getAttribute('role') === 'alert') return;
+      if (location.hash === '#compare-title') {
+        document.getElementById('compare-title').after(startupNotice);
+      } else if (location.hash === '#report') {
+        document.getElementById('report').after(startupNotice);
+      }
+      startupNotice.setAttribute('role', 'alert');
+      startupNotice.textContent = location.protocol === 'file:'
+        ? 'Open this build through a local web server. From the project folder, run node scripts/preview.mjs and open the address it prints.'
+        : typeof structuredClone !== 'function'
+          ? 'This browser is missing a feature required for local replays. Open the simulator in a current browser.'
+          : 'The simulator did not load. Reload the page to try again.';
+      startupNotice.hidden = false;
+    }
+    const loadTimer = window.setTimeout(showLoadFailure, 4000);
+    window.addEventListener('load', () => {
+      window.clearTimeout(loadingTimer);
+      window.clearTimeout(loadTimer);
+      showLoadFailure();
+    }, { once: true });
+  </script>
   <script type="module" src="./ui/app.js"></script>
 </body>
 </html>

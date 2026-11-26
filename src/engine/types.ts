@@ -45,8 +45,9 @@ export interface JobDefinition {
   waitPolicy?: WaitPolicy;
   fallbackEnabled?: boolean;
   deduplicationEnabled?: boolean;
+  completionOutcome?: 'Success' | 'Failure';
   // key → minute a producer is expected to publish; drives Unknown classification
-  scheduledPublishMinutes?: Record<string, Minute>;
+  scheduledPublishMinutes?: Record<string, Minute>; // key:last-colon:canonical-window via publishHintKey
 }
 
 export interface ScenarioConfig {
@@ -57,11 +58,15 @@ export interface ScenarioConfig {
 }
 
 export interface ArtifactReadRecord {
+  readId: string;
   jobId: string;
   attemptId: string;
   key: string;
   requiredWindow: number;
   actualWindowIndex: number | null;
+  producerAttemptId: string | null;
+  staleReason?: 'ExpiredExact' | 'PriorWindow';
+  unavailableReason?: 'InvalidProducer' | 'PublicationPending' | 'NotAvailableAtRead';
   state: ReadState;
   publishMinute: Minute | null;
   readMinute: Minute; // immutable after creation
@@ -78,8 +83,17 @@ export interface JobRunRecord {
   inputFreshnessStatus: InputFreshnessStatus | null;
   waitStart: Minute | null;
   waitEnd: Minute | null;
+  waitResolutionMinute: Minute | null;
   waitOutcome: WaitOutcome | null;
   missReason: MissReason | null;
+  policyArtifact?: Readonly<{
+    key: string;
+    windowIndex: number;
+    producerAttemptId: string;
+    publishMinute: Minute;
+    decisionMinute: Minute;
+    ageAtDecision: number;
+  }>;
   reads: ArtifactReadRecord[];
 }
 
@@ -106,6 +120,10 @@ export interface TraceEntry {
   detail: Record<string, unknown>;
 }
 
+export type OutputEffectEvidence = Readonly<{attemptId:string; key:string; windowIndex:number} & (
+  {kind:'Accepted' | 'Failed'} | {kind:'Suppressed'; acceptedEffectId:string}
+)>;
+
 export interface EventLogEntry {
   minute: Minute;
   typePriority: EventTypePriority;
@@ -113,6 +131,7 @@ export interface EventLogEntry {
   sortKey: string; // "MMMM:P:entityId"
   kind: string;
   payload: unknown;
+  completion?: Readonly<{ outcome:'Success' | 'Failure'; output:OutputEffectEvidence | null }>;
 }
 
 export interface SimulationResult {

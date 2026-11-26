@@ -1,49 +1,117 @@
 import type { EventLogEntry, EventTypePriority, Minute, ScenarioConfig } from './types.ts';
-import { sortKey, compareEntries } from './tie-break.ts';
+import { sortKey } from './tie-break.ts';
 
-export type QueueEntry = EventLogEntry & {
+type QueuePayload = Readonly<{ tPub:Minute }> | null;
+
+export type QueueEntry = Readonly<Omit<EventLogEntry,'payload'> & {
   jobId: string;
-};
+  payload: QueuePayload;
+}>;
 
-/**
- * Build the initial sorted event queue from a scenario config.
- *
- * Only Admission (all jobs) and DeadlineMiss (wait-policy jobs) are enqueued
- * at build time. Completion events are NEVER enqueued here — they are
- * enqueued exactly once when a job enters Running state.
- * WaitEnd events are enqueued dynamically by the simulator when store.add fires.
- */
-export function buildQueue(scenario: ScenarioConfig): QueueEntry[] {
-  const entries: QueueEntry[] = [];
+function immutableEntry(entry: QueueEntry): QueueEntry {
+  if (Object.isFrozen(entry) && (entry.payload === null || Object.isFrozen(entry.payload))) return entry;
+  return Object.freeze({ ...entry, payload: entry.payload === null ? null : Object.freeze({ ...entry.payload }) });
+}
 
-  for (const job of scenario.jobs) {
-    // Every job gets an Admission event at its scheduled start.
-    entries.push(makeEntry(job.scheduledStart, 2, job.id, 'Admission', null, job.id));
+/** Min-heap over the same deterministic ordering as the evidence log. */
+export class EventQueue {
+  private readonly heap: QueueEntry[] = [];
+  private readonly keys = new Set<string>();
 
-    // Wait-policy jobs get a tentative DeadlineMiss guard.
-    if (job.waitPolicy) {
-      entries.push(makeEntry(job.waitPolicy.deadline, 4, job.id, 'DeadlineMiss', null, job.id));
+  constructor(initial: Iterable<QueueEntry> = []) {
+    for (const entry of initial) {
+      this.heap.push(this.track(entry));
     }
+    for (let i = (this.heap.length >>> 1) - 1; i >= 0; i--) this.siftDown(i, this.heap[i]);
   }
 
-  // Sort and validate for duplicate triplets.
-  entries.sort((a, b) => {
-    if (
-      a.minute === b.minute &&
-      a.typePriority === b.typePriority &&
-      a.entityId === b.entityId
-    ) {
-      throw new Error(
-        `Configuration error: duplicate event key ` +
-          `(minute=${a.minute}, typePriority=${a.typePriority}, entityId="${a.entityId}")`,
-      );
+  private track(entry: QueueEntry) {
+    const stored = immutableEntry(entry);
+    if (!Number.isInteger(stored.minute) || stored.minute < 0 || stored.minute > 1439 ||
+        !Number.isInteger(stored.typePriority) || stored.typePriority < 1 || stored.typePriority > 4) {
+      throw new Error('Configuration error: event minute or phase out of range');
     }
-    if (a.sortKey < b.sortKey) return -1;
-    if (a.sortKey > b.sortKey) return 1;
-    return 0;
-  });
+    if (stored.sortKey !== sortKey(stored.minute, stored.typePriority, stored.entityId)) {
+      throw new Error('Configuration error: event sort key does not match its minute, phase and entity');
+    }
+    if (stored.kind === 'WaitEnd' && (stored.typePriority !== 3 || stored.payload?.tPub !== stored.minute)) {
+      throw new Error('Configuration error: wait wake must match its scheduled publication minute and phase');
+    }
+    // The sort key alone cannot distinguish a mislabeled completion from an
+    // admission, or the entity named by the log from the job being dispatched.
+    const kindPhase = stored.kind === 'Completion' ? 1 : stored.kind === 'Admission' ? 2
+      : stored.kind === 'WaitEnd' ? 3 : stored.kind === 'DeadlineMiss' ? 4 : undefined;
+    if (stored.typePriority !== kindPhase) throw new Error('Configuration error: event kind and phase do not agree');
+    if (stored.entityId !== stored.jobId) throw new Error('Configuration error: event entity must match its job');
+    if (stored.kind !== 'WaitEnd' && stored.payload !== null) {
+      throw new Error('Configuration error: event payload only for a wait wake');
+    }
+    if (this.keys.has(stored.sortKey)) throw new Error('Configuration error: duplicate event key ' + stored.sortKey);
+    this.keys.add(stored.sortKey);
+    return stored;
+  }
 
-  return entries;
+  push(candidate: QueueEntry) {
+    const entry = this.track(candidate);
+    let i = this.heap.length;
+    this.heap.push(entry);
+    while (i > 0) {
+      const parent = (i - 1) >>> 1;
+      if (this.heap[parent].sortKey < entry.sortKey) break;
+      this.heap[i] = this.heap[parent];
+      i = parent;
+    }
+    this.heap[i] = entry;
+  }
+
+  pop(): QueueEntry | undefined {
+    const first = this.heap[0];
+    const last = this.heap.pop();
+    if (!first || !last) return undefined;
+    if (this.heap.length) this.siftDown(0, last);
+    return first;
+  }
+
+  get pendingCount() { return this.heap.length; }
+
+  discardPendingWhere(discard: (entry: QueueEntry) => boolean) {
+    let write = 0;
+    for (const entry of this.heap) {
+      if (!discard(entry)) this.heap[write++] = entry;
+    }
+    this.heap.length = write;
+    // A discarded key still belongs to this simulation; never recycle it.
+    for (let i = (write >>> 1) - 1; i >= 0; i--) this.siftDown(i,this.heap[i]);
+  }
+
+  private siftDown(i: number, entry: QueueEntry) {
+    while (i * 2 + 1 < this.heap.length) {
+      let child = i * 2 + 1;
+      if (child + 1 < this.heap.length && this.heap[child + 1].sortKey < this.heap[child].sortKey) child++;
+      if (entry.sortKey < this.heap[child].sortKey) break;
+      this.heap[i] = this.heap[child];
+      i = child;
+    }
+    this.heap[i] = entry;
+  }
+}
+
+/**
+ * Build a min-heap for the initial events in linear time.
+ *
+ * Only admission events are known to be needed for every job. The simulator
+ * schedules cutoff checks when admission finds no fresh policy artifact,
+ * completion when a job actually starts, and wakeups for useful publications.
+ */
+export function buildQueue(scenario: ScenarioConfig): EventQueue {
+  return new EventQueue(admissionEntries(scenario.jobs));
+}
+
+// Let the heap consume admissions directly instead of storing a staging array.
+function* admissionEntries(jobs: ScenarioConfig['jobs']): IterableIterator<QueueEntry> {
+  for (const job of jobs) {
+    yield makeEntry(job.scheduledStart, 2, job.id, 'Admission', null, job.id);
+  }
 }
 
 export function makeEntry(
@@ -51,10 +119,10 @@ export function makeEntry(
   typePriority: EventTypePriority,
   entityId: string,
   kind: string,
-  payload: unknown,
+  payload: QueuePayload,
   jobId: string,
 ): QueueEntry {
-  return {
+  return immutableEntry({
     minute,
     typePriority,
     entityId,
@@ -62,5 +130,5 @@ export function makeEntry(
     kind,
     payload,
     jobId,
-  };
+  });
 }
